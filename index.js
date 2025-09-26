@@ -1,193 +1,228 @@
 const express = require('express');
-const bodyParser = require('body-parser');
-const fs = require('fs');
+const multer = require('multer');
 const login = require('ws3-fca');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// In-memory bot state (not persistent, just for demo)
+// Configure multer for file uploads
+const upload = multer({ dest: 'uploads/' });
+
+// In-memory bot state (consider persisting in production)
 let botConfig = null;
 let apiInstance = null;
 
 // Serve static HTML form
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public')); // Serve static files if needed
 
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>(NaSiir Alii Locker) - Bot</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 20px;
-      background: linear-gradient(to right, #9932CC, #FF00FF);
-    }
-    .container {
-            max-width: 650px; 
-            margin: 80px auto; 
-            background: 
-            rgba(0, 0, 0, 0.6); 
-            border-radius: 15px; 
-            padding: 30px; 
-            box-shadow: 0 0 20px rgba(255,255,255,0.2);
-    }
-    h1 {
-      color: white;
-      text-align: center;
-    }
-    .form-group {
-      margin-bottom: 15px;
-    }
-    label {
-      display: block;
-      margin-bottom: 5px;
-      font-weight: bold;
-      color: white
-    }
-    input, textarea {
-      width: 100%;
-      padding: 8px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      box-sizing: border-box;
-    }
-    textarea {
-      height: 150px;
-      font-family: monospace;
-    }
-    button {
-                    width: 100%;
-                    padding: 14px;
-                    background: #fc23b2;
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    font-size: 16px;
-                    font-weight: 500;
-                    cursor: pointer;
-                    transition: all 0.3s;
-                    margin-top: 10px;
-                    letter-spacing: 0.5px;
-    }
-    button:hover {
-      background-color: #45a049;
-    }
-    .status {
-      background: green;
-      color: #fff;
-      padding: 10px;
-      margin-top: 10px;
-      border-radius: 8px;
-    }
-    .success {
-      background-color: #dff0d8;
-      color: #3c763d;
-    }
-    .error {
-      background-color: #f2dede;
-      color: #a94442;
-    }
-  </style>
-</head>
-<body>
-<div class="container">
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>(NaSiir Alii Locker) - Bot</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          max-width: 800px;
+          margin: 0 auto;
+          padding: 20px;
+          background: linear-gradient(to right, #9932CC, #FF00FF);
+        }
+        .container {
+          max-width: 650px;
+          margin: 80px auto;
+          background: rgba(0, 0, 0, 0.6);
+          border-radius: 15px;
+          padding: 30px;
+          box-shadow: 0 0 20px rgba(255,255,255,0.2);
+        }
+        h1 {
+          color: white;
+          text-align: center;
+        }
+        .form-group {
+          margin-bottom: 15px;
+        }
+        label {
+          display: block;
+          margin-bottom: 5px;
+          font-weight: bold;
+          color: white;
+        }
+        input, textarea {
+          width: 100%;
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          box-sizing: border-box;
+        }
+        button {
+          width: 100%;
+          padding: 14px;
+          background: #fc23b2;
+          color: white;
+          border: none;
+          border-radius: 6px;
+          font-size: 16px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.3s;
+          margin-top: 10px;
+        }
+        button:hover {
+          background-color: #45a049;
+        }
+        .status {
+          background: green;
+          color: #fff;
+          padding: 10px;
+          margin-top: 10px;
+          border-radius: 8px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
         <h1>(NaSiir Alii Locker Bot)</h1>
-        <form method="POST" action="/start-bot" enctype="multipart/form-data">
-            <label>🔑 Upload Your Appstate.json file:</label><br>
-            <input type="file" name="appstate" accept=".json" required /><br><br>
-            <label>✏ Command Prefix (e.g., *):</label><br>
-            <input type="text" name="prefix" required /><br><br>
-            <label>👑 Admin ID:</label><br>
-            <input type="text" name="adminID" required /><br><br>
-            <button class="start" onclick="startBot()">🟢 Start Bot</button>
-            <button class="stop" onclick="stopBot()">🔴 Stop Bot</button>
-            <div class="status" id="status">Nickname: OFF</div>            
-          </div>
-          <script>
-            function startBot() {
-            	let nickname = document.getElementById('nickname').value;
-               document.getElementById('status').innerText = "Nickname: ON (" + nickname + ")";
-               alert("Bot Started!");            
+        <form id="botForm" enctype="multipart/form-data">
+          <label>🔑 Upload Your Appstate.json file:</label><br>
+          <input type="file" name="appstate" accept=".json" required /><br><br>
+          <label>✏ Command Prefix (e.g., *):</label><br>
+          <input type="text" name="prefix" required /><br><br>
+          <label>👑 Admin ID:</label><br>
+          <input type="text" name="adminID" required /><br><br>
+          <button type="submit" onclick="startBot()">🟢 Start Bot</button>
+          <button type="button" onclick="stopBot()">🔴 Stop Bot</button>
+          <div class="status" id="status">Status: OFF</div>
+        </form>
+      </div>
+      <script>
+        async function startBot() {
+          const form = document.getElementById('botForm');
+          const formData = new FormData(form);
+          const status = document.getElementById('status');
+          try {
+            const response = await fetch('/start-bot', { method: 'POST', body: formData });
+            const result = await response.json();
+            if (response.ok) {
+              status.innerText = 'Status: ON';
+              alert('Bot Started: ' + result.message);
+            } else {
+              status.innerText = 'Status: ERROR';
+              alert('Error: ' + result.message);
             }
-            function stopBot() {
-            	document.getElementById('status').innerText = "Nickname: OFF";
-                alert("Bot Stopped!");
-             }
-             </script>
-           </body>
-           </html>
-        ${botConfig ? '<p>✅ Bot is running!</p>' : ''}
+          } catch (error) {
+            status.innerText = 'Status: ERROR';
+            alert('Error: ' + error.message);
+          }
+        }
+        async function stopBot() {
+          const status = document.getElementById('status');
+          try {
+            const response = await fetch('/stop-bot', { method: 'POST' });
+            const result = await response.json();
+            if (response.ok) {
+              status.innerText = 'Status: OFF';
+              alert('Bot Stopped: ' + result.message);
+            } else {
+              alert('Error: ' + result.message);
+            }
+          } catch (error) {
+            status.innerText = 'Status: ERROR';
+            alert('Error: ' + error.message);
+          }
+        }
+      </script>
+    </body>
+    </html>
+    ${botConfig ? '<p>✅ Bot is running!</p>' : ''}
     `);
 });
 
 // Handle form and start bot
-app.post('/start-bot', express.raw({ type: 'multipart/form-data', limit: '5mb' }), (req, res) => {
-    // Parse the multipart form manually (simplified for Render demo)
-    // In production, use 'multer' or similar for file uploads
-    let body = req.body.toString();
-    let prefixMatch = body.match(/name="prefix"\r\n\r\n([^\r\n]*)/);
-    let adminIDMatch = body.match(/name="adminID"\r\n\r\n([^\r\n]*)/);
-    let appstateMatch = body.match(/name="appstate"; filename=".*"\r\nContent-Type: application\/json\r\n\r\n([\s\S]*?)\r\n-/);
-
-    if (!prefixMatch || !adminIDMatch || !appstateMatch) {
-        return res.send('❌ Invalid form data. Please fill all fields.');
-    }
-
-    let prefix = prefixMatch[1].trim();
-    let adminID = adminIDMatch[1].trim();
-    let appState;
+app.post('/start-bot', upload.single('appstate'), async (req, res) => {
     try {
-        appState = JSON.parse(appstateMatch[1]);
-    } catch (e) {
-        return res.send('❌ Invalid appstate.json file.');
+        const { prefix, adminID } = req.body;
+        if (!req.file || !prefix || !adminID) {
+            return res.status(400).json({ success: false, message: 'Missing required fields' });
+        }
+
+        let appState;
+        try {
+            appState = JSON.parse(fs.readFileSync(req.file.path));
+            fs.unlinkSync(req.file.path); // Clean up uploaded file
+        } catch (error) {
+            return res.status(400).json({ success: false, message: 'Invalid appstate.json file' });
+        }
+
+        botConfig = { appState, prefix, adminID };
+        await startBot(botConfig);
+
+        res.json({ success: true, message: 'Bot started successfully' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: `Error: ${error.message}` });
     }
-
-    botConfig = { appState, prefix, adminID };
-    startBot(botConfig);
-
-    res.redirect('/');
 });
 
-// Bot logic (from your script, adapted)
-function startBot({ appState, prefix, adminID }) {
-    if (apiInstance) return; // Prevent multiple bots
+// Stop bot
+app.post('/stop-bot', (req, res) => {
+    if (!apiInstance) {
+        return res.json({ success: false, message: 'Bot is not running' });
+    }
+    apiInstance.logout(() => {
+        apiInstance = null;
+        botConfig = null;
+        res.json({ success: true, message: 'Bot stopped successfully' });
+    });
+});
 
-    login({ appState }, (err, api) => {
-        if (err) return console.error('❌ Login failed:', err);
+// Bot logic
+async function startBot({ appState, prefix, adminID }) {
+    if (apiInstance) {
+        throw new Error('Bot is already running');
+    }
 
-        console.log('\n✅ Bot is running and listening for commands...');
-        api.setOptions({ listenEvents: true });
-        apiInstance = api;
+    return new Promise((resolve, reject) => {
+        login({ appState }, (err, api) => {
+            if (err) {
+                console.error('❌ Login failed:', err);
+                return reject(err);
+            }
 
-        const lockedGroups = {};
-        const lockedNicknames = {};
-        const lockedDPs = {};
-        const lockedThemes = {};
-        const lockedEmojis = {};
+            console.log('✅ Bot is running and listening for commands...');
+            api.setOptions({ listenEvents: true });
+            apiInstance = api;
 
-        api.listenMqtt((err, event) => {
-            if (err) return console.error('❌ Listen error:', err);
+            const lockedGroups = {};
+            const lockedNicknames = {};
+            const lockedDPs = {};
+            const lockedThemes = {};
+            const lockedEmojis = {};
 
-            if (event.type === 'message' && event.body.startsWith(prefix)) {
-                const senderID = event.senderID;
-                const args = event.body.slice(prefix.length).trim().split(' ');
-                const command = args[0].toLowerCase();
-                const input = args.slice(1).join(' ');
-
-                if (senderID !== adminID) {
-                    return api.sendMessage('❌ You are not authorized to use this command.', event.threadID);
+            api.listenMqtt((err, event) => {
+                if (err) {
+                    console.error('❌ Listen error:', err);
+                    return;
                 }
 
-                // Help
-                if (command === 'help') {
-        api.sendMessage(`
+                if (event.type === 'message' && event.body.startsWith(prefix)) {
+                    const senderID = event.senderID;
+                    const args = event.body.slice(prefix.length).trim().split(' ');
+                    const command = args[0].toLowerCase();
+                    const input = args.slice(1).join(' ');
+
+                    if (senderID !== adminID) {
+                        return api.sendMessage('❌ You are not authorized to use this command.', event.threadID);
+                    }
+
+                    if (command === 'help') {
+                        api.sendMessage(`
 ╭────────────────────╮
              🔐 𝘾𝙊𝙈𝙈𝘼𝙉𝘿 🔐
 ╰────────────────────╯
@@ -202,114 +237,101 @@ function startBot({ appState, prefix, adminID }) {
 ╰─────────────────►
           Comming soon : cmnd
 ╭─────────────────────►
-│target [[no <release>
+│target [no <release>
 ╰─────────────────►
 ╭────────────────────╮
              👑 (𝗡𝗔𝗦𝗜𝗜𝗥 - 𝗔𝗟𝗜) 👑
 ╰────────────────────╯`, event.threadID);
-               }
-            
-                // Group Name Lock
-                if (command === 'grouplockname' && args[1] === 'on') {
-                    const groupName = input.replace('on', '').trim();
-                    lockedGroups[event.threadID] = groupName;
-                    api.setTitle(groupName, event.threadID, (err) => {
-                        if (err) return api.sendMessage('❌ Failed to lock group name.', event.threadID);
-                        api.sendMessage(`✅ Group name locked as: ${groupName}`, event.threadID);
-                    });
-                }
+                    }
 
-                // Nickname Lock
-                if (command === 'nicknamelock' && args[1] === 'on') {
-                    const nickname = input.replace('on', '').trim();
-                    api.getThreadInfo(event.threadID, (err, info) => {
-                        if (err) return console.error('❌ Error fetching thread info:', err);
-
-                        info.participantIDs.forEach((userID) => {
-                            api.changeNickname(nickname, event.threadID, userID, (err) => {
-                                if (err) console.error(`❌ Failed to set nickname for user ${userID}:`, err);
-                            });
+                    if (command === 'grouplockname' && args[1] === 'on') {
+                        const groupName = input.replace('on', '').trim();
+                        lockedGroups[event.threadID] = groupName;
+                        api.setTitle(groupName, event.threadID, (err) => {
+                            if (err) return api.sendMessage('❌ Failed to lock group name.', event.threadID);
+                            api.sendMessage(`✅ Group name locked as: ${groupName}`, event.threadID);
                         });
+                    }
 
-                        lockedNicknames[event.threadID] = nickname;
-                        api.sendMessage(`✅ Nicknames locked as: ${nickname}`, event.threadID);
-                    });
+                    if (command === 'nicknamelock' && args[1] === 'on') {
+                        const nickname = input.replace('on', '').trim();
+                        api.getThreadInfo(event.threadID, (err, info) => {
+                            if (err) return console.error('❌ Error fetching thread info:', err);
+                            info.participantIDs.forEach((userID) => {
+                                api.changeNickname(nickname, event.threadID, userID, (err) => {
+                                    if (err) console.error(`❌ Failed to set nickname for user ${userID}:`, err);
+                                });
+                            });
+                            lockedNicknames[event.threadID] = nickname;
+                            api.sendMessage(`✅ Nicknames locked as: ${nickname}`, event.threadID);
+                        });
+                    }
+
+                    if (command === 'groupdplock' && args[1] === 'on') {
+                        lockedDPs[event.threadID] = true;
+                        api.sendMessage('✅ Group DP locked. No changes allowed.', event.threadID);
+                    }
+
+                    if (command === 'groupthemeslock' && args[1] === 'on') {
+                        lockedThemes[event.threadID] = true;
+                        api.sendMessage('✅ Group themes locked. No changes allowed.', event.threadID);
+                    }
+
+                    if (command === 'groupemojilock' && args[1] === 'on') {
+                        lockedEmojis[event.threadID] = true;
+                        api.sendMessage('✅ Group emoji locked. No changes allowed.', event.threadID);
+                    }
+
+                    if (command === 'tid') {
+                        api.sendMessage(`Group UID: ${event.threadID}`, event.threadID);
+                    }
+
+                    if (command === 'uid') {
+                        api.sendMessage(`Your UID: ${senderID}`, event.threadID);
+                    }
+
+                    if (command === 'fyt' && args[1] === 'on') {
+                        api.sendMessage('🔥 Fight mode activated! Admin commands enabled.', event.threadID);
+                    }
                 }
 
-                // DP Lock
-                if (command === 'groupdplock' && args[1] === 'on') {
-                    lockedDPs[event.threadID] = true;
-                    api.sendMessage('✅ Group DP locked. No changes allowed.', event.threadID);
-                }
+                if (event.logMessageType) {
+                    const lockedName = lockedGroups[event.threadID];
+                    if (event.logMessageType === 'log:thread-name' && lockedName) {
+                        api.setTitle(lockedName, event.threadID, () => {
+                            api.sendMessage('❌ Group name change reverted.', event.threadID);
+                        });
+                    }
 
-                // Themes Lock
-                if (command === 'groupthemeslock' && args[1] === 'on') {
-                    lockedThemes[event.threadID] = true;
-                    api.sendMessage('✅ Group themes locked. No changes allowed.', event.threadID);
-                }
+                    const lockedNickname = lockedNicknames[event.threadID];
+                    if (event.logMessageType === 'log:thread-nickname' && lockedNickname) {
+                        const affectedUserID = event.logMessageData.participant_id;
+                        api.changeNickname(lockedNickname, event.threadID, affectedUserID, () => {
+                            api.sendMessage('❌ Nickname change reverted.', event.threadID);
+                        });
+                    }
 
-                // Emoji Lock
-                if (command === 'groupemojilock' && args[1] === 'on') {
-                    lockedEmojis[event.threadID] = true;
-                    api.sendMessage('✅ Group emoji locked. No changes allowed.', event.threadID);
-                }
+                    if (event.logMessageType === 'log:thread-icon' && lockedEmojis[event.threadID]) {
+                        api.changeThreadEmoji('😀', event.threadID, () => {
+                            api.sendMessage('❌ Emoji change reverted.', event.threadID);
+                        });
+                    }
 
-                // Fetch Group UID
-                if (command === 'tid') {
-                    api.sendMessage(`Group UID: ${event.threadID}`, event.threadID);
-                }
+                    if (event.logMessageType === 'log:thread-theme' && lockedThemes[event.threadID]) {
+                        api.sendMessage('❌ Theme change reverted.', event.threadID);
+                    }
 
-                // Fetch User UID
-                if (command === 'uid') {
-                    api.sendMessage(`Your UID: ${senderID}`, event.threadID);
+                    if (event.logMessageType === 'log:thread-image' && lockedDPs[event.threadID]) {
+                        api.sendMessage('❌ Group DP change reverted.', event.threadID);
+                    }
                 }
+            });
 
-                // Fight Mode
-                if (command === 'fyt' && args[1] === 'on') {
-                    api.sendMessage('🔥 Fight mode activated! Admin commands enabled.', event.threadID);
-                }
-            }
-
-            // Revert Changes
-            if (event.logMessageType) {
-                const lockedName = lockedGroups[event.threadID];
-                if (event.logMessageType === 'log:thread-name' && lockedName) {
-                    api.setTitle(lockedName, event.threadID, () => {
-                        api.sendMessage('❌ Group name change reverted.', event.threadID);
-                    });
-                }
-
-                const lockedNickname = lockedNicknames[event.threadID];
-                if (event.logMessageType === 'log:thread-nickname' && lockedNickname) {
-                    const affectedUserID = event.logMessageData.participant_id;
-                    api.changeNickname(lockedNickname, event.threadID, affectedUserID, () => {
-                        api.sendMessage('❌ Nickname change reverted.', event.threadID);
-                    });
-                }
-
-                if (event.logMessageType === 'log:thread-icon' && lockedEmojis[event.threadID]) {
-                    api.changeThreadEmoji('😀', event.threadID, () => {
-                        api.sendMessage('❌ Emoji change reverted.', event.threadID);
-                    });
-                }
-
-                if (event.logMessageType === 'log:thread-theme' && lockedThemes[event.threadID]) {
-                    api.sendMessage('❌ Theme change reverted.', event.threadID);
-                }
-
-                if (event.logMessageType === 'log:thread-image' && lockedDPs[event.threadID]) {
-                    api.sendMessage('❌ Group DP change reverted.', event.threadID);
-                }
-            }
+            resolve();
         });
     });
 }
-res.json({ success: true, message: "Bot started" });
-    });
-app.post("/stop-bot", (req, res) => {
-    botRunning = false;
-    res.json({ success: true, message: "Bot stopped" });
-});
+
 app.listen(PORT, () => {
     console.log(`🌐 Web panel running on http://localhost:${PORT}`);
 });
